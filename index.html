@@ -40,7 +40,7 @@
         }
 
         if (isInIframe) {
-          // 监听父窗口主动推送的主题消息
+          
           window.addEventListener("message", function (event) {
             if (event.data && typeof event.data.theme === "string") {
               const theme = event.data.theme;
@@ -50,7 +50,7 @@
             }
           });
         } else {
-          // 非 iframe 环境，使用默认 light 主题
+         
           applyThemeToDOM("light");
         }
       })();
@@ -60,11 +60,10 @@
         if (window.self === window.top) return;
         var reported = {};
         window.addEventListener("error", function (event) {
-          // 资源加载失败的 error 事件没有 message，此处仅上报 JS 运行时错误
           if (!event || !event.message) return;
           var key =
             event.message + "|" + (event.filename || "") + "|" + (event.lineno || 0);
-          if (reported[key]) return; // 相同错误只上报一次，避免渲染循环刷屏
+          if (reported[key]) return; 
           reported[key] = true;
           try {
             window.parent.postMessage(
@@ -84,7 +83,7 @@
               "*"
             );
           } catch (e) {
-            /* 上报失败不影响页面运行 */
+           
           }
         });
       })();
