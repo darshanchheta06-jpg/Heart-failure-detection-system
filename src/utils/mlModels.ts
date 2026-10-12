@@ -12,6 +12,7 @@ export interface ModelResult {
   confusionMatrix: number[][];
   predictions: number[];
   probabilities: number[];
+  trueLabels: number[];
   featureImportance: Record<string, number>;
   trainingTime: number;
 }
@@ -469,6 +470,7 @@ export function evaluateModel(model: TrainedModel, X: number[][], y: number[]): 
     confusionMatrix: [[tn, fp], [fn, tp]],
     predictions,
     probabilities,
+    trueLabels: y,
     featureImportance: model.featureImportance,
     trainingTime: 0
   };

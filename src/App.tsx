@@ -67,31 +67,78 @@ export default function App() {
 
   // Validate and clean data
   const handleValidate = useCallback(() => {
-    if (!datasetInfo || !targetCol) return;
+    if (!datasetInfo || !targetCol) {
+      if (!targetCol) {
+        setError('Please select a target column first.');
+      }
+      return;
+    }
+    console.log('Validating dataset with target:', targetCol);
     const val = validateDataset(datasetInfo, targetCol);
+    console.log('Validation result:', val);
     setValidation(val);
     if (val.isValid) {
       const cleanedData = cleanDataset(datasetInfo.data, targetCol, datasetInfo.columns, datasetInfo.columnTypes);
+      console.log('Cleaned data:', cleanedData.data.length, 'rows');
       setCleaned(cleanedData);
       const fCols = datasetInfo.columns.filter(c => c !== targetCol && !cleanedData.excludedColumns.includes(c));
+      console.log('Feature columns:', fCols);
       setFeatureCols(fCols);
+    } else {
+      console.log('Validation failed:', val.issues);
     }
   }, [datasetInfo, targetCol]);
 
+  // Auto-validate when target column changes
+  useMemo(() => {
+    if (datasetInfo && targetCol && !validation) {
+      handleValidate();
+    }
+  }, [datasetInfo, targetCol, validation, handleValidate]);
+
   // Train models
   const handleTrainModels = useCallback(async () => {
-    if (!cleaned || !targetCol || featureCols.length === 0) return;
+    if (!cleaned) {
+      setError('No cleaned dataset available. Please validate the data first.');
+      return;
+    }
+    if (!targetCol) {
+      setError('No target column selected.');
+      return;
+    }
+    if (featureCols.length === 0) {
+      setError('No feature columns available for training.');
+      return;
+    }
+    if (!datasetInfo) {
+      setError('Dataset information not available.');
+      return;
+    }
+
     setIsTraining(true);
     setError('');
 
     try {
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      const { X: allX, featureNames: fNames } = prepareFeatures(cleaned.data, featureCols, datasetInfo!.columnTypes);
+      console.log('Starting model training...');
+      console.log('Cleaned data rows:', cleaned.data.length);
+      console.log('Feature columns:', featureCols);
+      console.log('Target column:', targetCol);
+
+      const { X: allX, featureNames: fNames } = prepareFeatures(cleaned.data, featureCols, datasetInfo.columnTypes);
       setFeatureNames(fNames);
 
-      const y = cleaned.data.map(row => Number(row[targetCol]));
-      const { scaled, means, stds } = scaleFeatures(allX);
+      console.log('Prepared features:', allX.length, 'rows,', allX[0]?.length, 'features');
+
+      const y = cleaned.data.map(row => {
+        const val = row[targetCol];
+        return typeof val === 'number' ? val : Number(val);
+      });
+
+      console.log('Target values sample:', y.slice(0, 5));
+
+      const { scaled } = scaleFeatures(allX);
 
       // Stratified split
       const indexedData = cleaned.data.map((row, i) => ({ row, index: i }));
@@ -99,6 +146,8 @@ export default function App() {
 
       const trainIndices = splitResult.train.map(d => d.index);
       const testIndices = splitResult.test.map(d => d.index);
+
+      console.log('Train size:', trainIndices.length, 'Test size:', testIndices.length);
 
       const XTrain = trainIndices.map(i => scaled[i]);
       const yTrain = trainIndices.map(i => y[i]);
@@ -119,6 +168,7 @@ export default function App() {
       const trained: TrainedModel[] = [];
 
       for (let i = 0; i < modelConfigs.length; i++) {
+        console.log(`Training ${modelNames[i]}...`);
         const start = performance.now();
         const model = modelConfigs[i]();
         const result = evaluateModel(model, XTest, yTest);
@@ -126,13 +176,16 @@ export default function App() {
         result.name = modelNames[i];
         results.push(result);
         trained.push(model);
+        console.log(`${modelNames[i]} trained. Accuracy: ${(result.accuracy * 100).toFixed(1)}%`);
       }
 
+      console.log('All models trained successfully');
       setModels(results);
       setTrainedModels(trained);
       setCurrentPage('evaluation');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Model training failed.');
+      console.error('Training error:', err);
+      setError(err instanceof Error ? err.message : 'Model training failed. Check console for details.');
     } finally {
       setIsTraining(false);
     }
@@ -140,7 +193,19 @@ export default function App() {
 
   // Make prediction
   const handlePredict = useCallback(() => {
-    if (trainedModels.length === 0 || !predictionInputs) return;
+    if (trainedModels.length === 0) {
+      setError('No trained models available. Please train models first.');
+      return;
+    }
+    if (!predictionInputs) {
+      setError('No input data provided.');
+      return;
+    }
+    if (!cleaned || !datasetInfo) {
+      setError('Dataset not available for prediction.');
+      return;
+    }
+
     try {
       // Build feature vector matching the training schema
       const features: number[] = [];
@@ -162,16 +227,23 @@ export default function App() {
       const sampleRow: DataRow = {};
       featureCols.forEach((col, i) => { sampleRow[col] = features[i]; });
       
-      const { X: encodedX } = prepareFeatures([sampleRow], featureCols, datasetInfo!.columnTypes);
+      const { X: encodedX } = prepareFeatures([sampleRow], featureCols, datasetInfo.columnTypes);
       const rawFeatures = encodedX[0];
 
       // Scale features using training data statistics
-      const allX = prepareFeatures(cleaned!.data, featureCols, datasetInfo!.columnTypes).X;
+      const allX = prepareFeatures(cleaned.data, featureCols, datasetInfo.columnTypes).X;
       const { means, stds } = scaleFeatures(allX);
       const scaledFeatures = rawFeatures.map((v, i) => (v - means[i]) / stds[i]);
 
       // Use the best model (highest F1)
-      const bestIdx = models.reduce((bestIdx, m, i) => m.f1Score > models[bestIdx].f1Score ? i : bestIdx, 0);
+      let bestIdx = 0;
+      let bestF1 = models[0].f1Score;
+      for (let i = 1; i < models.length; i++) {
+        if (models[i].f1Score > bestF1) {
+          bestF1 = models[i].f1Score;
+          bestIdx = i;
+        }
+      }
       const model = trainedModels[bestIdx];
       const prediction = model.predict(scaledFeatures);
       const probability = model.predictProba(scaledFeatures);
@@ -189,7 +261,7 @@ export default function App() {
     { id: 'upload', label: 'Upload Dataset', icon: <Upload className="w-4 h-4" />, disabled: false },
     { id: 'quality', label: 'Data Quality', icon: <Shield className="w-4 h-4" />, disabled: !datasetInfo },
     { id: 'eda', label: 'Exploratory Analysis', icon: <BarChart3 className="w-4 h-4" />, disabled: !datasetInfo },
-    { id: 'training', label: 'Model Training', icon: <Brain className="w-4 h-4" />, disabled: !cleaned },
+    { id: 'training', label: 'Model Training', icon: <Brain className="w-4 h-4" />, disabled: !datasetInfo },
     { id: 'evaluation', label: 'Evaluation', icon: <Target className="w-4 h-4" />, disabled: models.length === 0 },
     { id: 'prediction', label: 'Prediction', icon: <Activity className="w-4 h-4" />, disabled: trainedModels.length === 0 },
     { id: 'importance', label: 'Feature Importance', icon: <TrendingUp className="w-4 h-4" />, disabled: models.length === 0 },
@@ -266,7 +338,7 @@ export default function App() {
           {currentPage === 'eda' && datasetInfo && (
             <EDAPage info={datasetInfo} targetCol={targetCol} cleaned={cleaned} />
           )}
-          {currentPage === 'training' && cleaned && (
+          {currentPage === 'training' && (
             <TrainingPage
               cleaned={cleaned}
               featureCols={featureCols}
@@ -983,8 +1055,29 @@ function EDAPage({ info, targetCol, cleaned }: { info: DatasetInfo; targetCol: s
 
 // Training Page
 function TrainingPage({ cleaned, featureCols, isTraining, onTrain }: {
-  cleaned: CleanedDataset; featureCols: string[]; isTraining: boolean; onTrain: () => void;
+  cleaned: CleanedDataset | null; featureCols: string[]; isTraining: boolean; onTrain: () => void;
 }) {
+  if (!cleaned) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-3">
+          <Brain className="w-6 h-6 text-red-600" />
+          <h1 className="text-2xl font-bold text-gray-900">Model Training</h1>
+        </div>
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-6 text-center">
+          <AlertTriangle className="w-10 h-10 text-amber-500 mx-auto mb-3" />
+          <h3 className="font-semibold text-amber-800 mb-2">Data Not Ready</h3>
+          <p className="text-sm text-amber-700 mb-4">
+            Please upload a dataset and validate it before training models.
+          </p>
+          <p className="text-xs text-amber-600">
+            Go to "Upload Dataset" to load a CSV file, then "Data Quality" to validate and clean the data.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
@@ -1230,10 +1323,7 @@ function EvaluationPage({ models, featureNames }: { models: ModelResult[]; featu
               <Tooltip />
               <Legend />
               {models.map((m, i) => {
-                const rocPoints = computeROCCurve(
-                  m.predictions.map((_, j) => j < m.confusionMatrix[0][0] + m.confusionMatrix[0][1] ? 0 : 1),
-                  m.probabilities
-                );
+                const rocPoints = computeROCCurve(m.trueLabels, m.probabilities);
                 return (
                   <Line key={m.name} data={rocPoints} dataKey="tpr" name={`${m.name} (AUC=${(m.aucRoc * 100).toFixed(0)}%)`} stroke={COLORS[i]} dot={false} strokeWidth={2} />
                 );
